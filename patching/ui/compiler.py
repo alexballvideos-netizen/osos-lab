@@ -293,6 +293,7 @@ class DocumentCompiler:
             ]
         )
         put(data, 0x24, title)
+        self.customize_settings_preview(data)
         resources.add("VLyt", preview_view, data)
         resources.add(
             "TEVT",
@@ -322,6 +323,57 @@ class DocumentCompiler:
         resources.replace(
             "SLst", resources.native("SettingsMenus_Main_Screen"), pack_blocks(layouts)
         )
+
+    def customize_settings_preview(self, data):
+        """Replace the Legal layout's Apple logo, position and "Apple Inc." text."""
+        document, resources = self.document, self.resources
+        custom = (
+            document.preview_image
+            or document.preview_offset != (0, 0)
+            or document.preview_text
+        )
+        if not custom:
+            return
+        # 0xa4 is Settings_Icon_View's source and 0xc8 the info text's source.
+        if word(data, 0xA4) != 0x71F or word(data, 0xC8) != 0x720:
+            raise ValueError("Settings preview layout changed")
+        if document.preview_image:
+            image = resources.allocate()
+            resources.add(
+                "SORC",
+                image,
+                pack_blocks(
+                    [
+                        (
+                            0x534F5243,
+                            struct.pack(
+                                "<III", 0x80, resources.native(document.preview_image), 1
+                            ),
+                        )
+                    ]
+                ),
+            )
+            put(data, 0xA4, image)
+        dx, dy = document.preview_offset
+        # Settings_Icon_View: word 0x7c is x (0x3e9), word 0x54 is y (0x3e8).
+        put(data, 0x7C, (word(data, 0x7C) + dx) & 0xFFFFFFFF)
+        put(data, 0x54, (word(data, 0x54) + dy) & 0xFFFFFFFF)
+        name = document.root.name
+        if document.preview_text in ("@value", "@live"):
+            if document.preview_text == "@value":
+                prop = self.string_ids[name + "_Value"]
+            else:
+                prop = self.resources.allocate(name + "_PreviewText")
+                self.string_ids[name + "_PreviewText"] = prop
+            text = resources.allocate()
+            resources.add(
+                "SORC",
+                text,
+                pack_blocks([(0x534F5243, struct.pack("<III", 0x8900, prop, 1))]),
+            )
+            put(data, 0xC8, text)
+        elif document.preview_text:
+            put(data, 0xC8, resources.source(document.preview_text))
 
     def bind_settings_events(self, item_id):
         document = self.document

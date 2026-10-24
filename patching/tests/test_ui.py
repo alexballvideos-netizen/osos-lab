@@ -39,6 +39,35 @@ def menu(rows):
     )
 
 
+def preview_toggle(options):
+    return (
+        '<ui><toggle id="PREVIEW" title="Preview"/>'
+        '<settings-entry menu="PREVIEW" '
+        f'after="SettingsMenu_ListItem_Brightness" {options}/></ui>'
+    )
+
+
+def preview_resources():
+    root = Path(__file__).resolve().parents[2]
+    metadata = json.loads((root / "firmware/ui.json").read_text())
+    bindings = json.loads((root / "payload/native/ui.json").read_text())["bindings"]
+    return Resources(metadata["resources"], bindings)
+
+
+def compile_preview(options):
+    resources = preview_resources()
+    document = parser.parse(preview_toggle(options))
+    return resources, compile_document(resources, document)
+
+
+def preview_layout(resources):
+    return next(
+        data
+        for (kind, _), data in resources.added.items()
+        if kind == "VLyt" and not isinstance(data, bytes)
+    )
+
+
 class UiTests(unittest.TestCase):
     def test_settings_toggle_preserves_stock_rows_and_has_no_navigation(self):
         root = Path(__file__).resolve().parents[2]
@@ -77,6 +106,89 @@ class UiTests(unittest.TestCase):
         self.assertIn(b"CFW_DarkMode_Toggle", appended)
         self.assertNotIn(b"navigator.PushScreen", appended)
         self.assertNotIn("CFW_DarkMode_Screen", resources.names)
+
+    def test_settings_preview_options_parse(self):
+        document = parser.parse(preview_toggle(
+            'preview-image="MainMenu_Sleep_Image" preview-offset="-10,-33" '
+            'preview-text="@value"'
+        ))
+        self.assertEqual(document.preview_image, "MainMenu_Sleep_Image")
+        self.assertEqual(document.preview_offset, (-10, -33))
+        self.assertEqual(document.preview_text, "@value")
+        document = parser.parse(preview_toggle('preview-image="0x0DAD071D"'))
+        self.assertEqual(document.preview_image, 0x0DAD071D)
+        self.assertEqual(document.preview_offset, (0, 0))
+
+    def test_invalid_settings_preview_options_fail(self):
+        for options in (
+            'preview-image="bad name"',
+            'preview-image="0x100000000"',
+            'preview-offset="1"',
+            'preview-offset="1,2,3"',
+            'preview-offset="a,b"',
+            'preview-offset="1, 2"',
+            'preview-typo="1"',
+        ):
+            with self.subTest(options=options), self.assertRaises(ValueError):
+                parser.parse(preview_toggle(options))
+        with self.assertRaises(ValueError):
+            parser.parse(
+                '<ui><text id="PAGE" title="Page" file="page.txt"/>'
+                '<settings-entry menu="PAGE" after="1" preview-text="@value"/></ui>'
+            )
+
+    def test_settings_preview_defaults_keep_the_legal_layout(self):
+        resources, _ = compile_preview("")
+        legal = preview_layout(resources)
+        stock = resources.stock("VLyt", "SettingsInfo_Template_Legal_Layout")
+        for offset in (0x54, 0x7C, 0xA4, 0xC8):
+            self.assertEqual(word(legal, offset), word(stock, offset))
+
+    def test_settings_preview_writes_image_offset_and_value_binding(self):
+        resources, compiled = compile_preview(
+            'preview-image="0x0dad071d" preview-offset="-10,-33" '
+            'preview-text="@value"'
+        )
+        legal = preview_layout(resources)
+        stock = resources.stock("VLyt", "SettingsInfo_Template_Legal_Layout")
+        self.assertEqual(word(legal, 0x7C), (word(stock, 0x7C) - 10) & 0xFFFFFFFF)
+        self.assertEqual(word(legal, 0x54), (word(stock, 0x54) - 33) & 0xFFFFFFFF)
+        image = blocks(resources.added["SORC", word(legal, 0xA4)])
+        self.assertEqual(
+            struct.unpack("<III", image[0][1].data), (0x80, 0x0DAD071D, 1)
+        )
+        text = blocks(resources.added["SORC", word(legal, 0xC8)])
+        self.assertEqual(
+            struct.unpack("<III", text[0][1].data),
+            (0x8900, compiled.string_ids["PREVIEW_Value"], 1),
+        )
+
+    def test_settings_preview_offset_wraps_and_adds(self):
+        resources, _ = compile_preview('preview-offset="5,-1000000"')
+        legal = preview_layout(resources)
+        stock = resources.stock("VLyt", "SettingsInfo_Template_Legal_Layout")
+        self.assertEqual(word(legal, 0x7C), word(stock, 0x7C) + 5)
+        self.assertEqual(word(legal, 0x54), (word(stock, 0x54) - 1000000) & 0xFFFFFFFF)
+
+    def test_settings_preview_static_and_live_text(self):
+        resources, _ = compile_preview('preview-text="Hello"')
+        legal = preview_layout(resources)
+        self.assertNotEqual(word(legal, 0xC8), 0x720)
+        resources, compiled = compile_preview('preview-text="@live"')
+        legal = preview_layout(resources)
+        prop = compiled.string_ids["PREVIEW_PreviewText"]
+        text = blocks(resources.added["SORC", word(legal, 0xC8)])
+        self.assertEqual(
+            struct.unpack("<III", text[0][1].data), (0x8900, prop, 1)
+        )
+
+    def test_settings_preview_rejects_a_changed_layout(self):
+        resources = preview_resources()
+        key = ("VLyt", resources.native("SettingsInfo_Template_Legal_Layout"))
+        resources.original[key].origins[0][0].words[0xA4] = 0x1234
+        document = parser.parse(preview_toggle('preview-text="Hello"'))
+        with self.assertRaises(ValueError):
+            compile_document(resources, document)
 
     def test_album_artists_reuses_native_routes_and_adds_a_music_row(self):
         root = Path(__file__).resolve().parents[2]

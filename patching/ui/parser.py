@@ -126,7 +126,7 @@ class Parser:
                     else self.parse_text(node)
                 )
         elif node.tag == "settings-entry":
-            attributes(node, "menu after", "open")
+            attributes(node, "menu after", "open preview-image preview-offset preview-text")
             if self.entry is not None:
                 raise ValueError("Duplicate Settings menu entry")
             self.entry = node
@@ -243,6 +243,13 @@ class Parser:
             raise ValueError("Invalid Settings menu entry")
         document.after = resource_reference(entry.attrib["after"])
         document.open_action = entry.get("open", "")
+        if "preview-image" in entry.attrib:
+            document.preview_image = resource_reference(entry.attrib["preview-image"])
+        if "preview-offset" in entry.attrib:
+            document.preview_offset = parse_offset(entry.attrib["preview-offset"])
+        document.preview_text = entry.get("preview-text", "")
+        if document.preview_text == "@value" and document.root.kind != "toggle":
+            raise ValueError("preview-text @value requires a toggle")
 
 
 def resource_reference(value):
@@ -253,6 +260,13 @@ def resource_reference(value):
     elif re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
         return value
     raise ValueError(f"Invalid native resource reference: {value}")
+
+
+def parse_offset(value):
+    match = re.fullmatch(r"(-?\d+),(-?\d+)", value)
+    if match is None:
+        raise ValueError(f"Invalid preview offset: {value}")
+    return int(match[1]), int(match[2])
 
 
 def parse(data):

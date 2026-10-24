@@ -38,6 +38,9 @@ class Document:
     actions: list[Item]
     after: str | int = ""
     open_action: str = ""
+    preview_image: str | int = ""
+    preview_offset: tuple[int, int] = (0, 0)
+    preview_text: str = ""
     strings: dict[str, str] = field(default_factory=dict)
     events: list[ScreenEvent] = field(default_factory=list)
     music_entry: dict[str, str] | None = None
